@@ -1,24 +1,22 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {
   View,
-  Text,
-  ScrollView,
   PermissionsAndroid,
   Platform,
   StyleSheet,
+  Text,
 } from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import MapView, {Marker} from 'react-native-maps';
 
-type Location = {
-  latitude: number;
-  longitude: number;
-  timestamp: number;
-};
+const SERVER_URL = 'https://your-api.example.com/location'; // ✅ 실제 서버 주소로 교체
 
 const App = () => {
-  const [locations, setLocations] = useState<Location[]>([]);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [location, setLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    timestamp: number;
+  } | null>(null);
 
   const requestPermission = async (): Promise<boolean> => {
     if (Platform.OS === 'ios') {
@@ -36,33 +34,30 @@ const App = () => {
     return false;
   };
 
-  const formatTimestamp = (timestamp: number): string => {
-    const date = new Date(timestamp);
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
-      date.getDate(),
-    )} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(
-      date.getSeconds(),
-    )}`;
-  };
-
-  const getAndStoreLocation = async () => {
+  const getAndSendLocation = () => {
     Geolocation.getCurrentPosition(
-      async position => {
-        const newLocation: Location = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          timestamp: position.timestamp,
-        };
+      async pos => {
+        const {latitude, longitude} = pos.coords;
+        const timestamp = pos.timestamp;
+        setLocation({latitude, longitude, timestamp});
 
-        const prevData = await AsyncStorage.getItem('location_logs');
-        const updated = [
-          ...(prevData ? JSON.parse(prevData) : []),
-          newLocation,
-        ];
-
-        await AsyncStorage.setItem('location_logs', JSON.stringify(updated));
-        setLocations(updated);
+        // 서버로 전송
+        try {
+          await fetch(SERVER_URL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              latitude,
+              longitude,
+              timestamp,
+            }),
+          });
+          console.log('📤 위치 전송 완료');
+        } catch (err) {
+          console.error('❌ 서버 전송 실패:', err);
+        }
       },
       error => {
         console.warn('위치 오류:', error.message);
@@ -77,56 +72,57 @@ const App = () => {
     );
   };
 
-  const loadStoredLocations = async () => {
-    const stored = await AsyncStorage.getItem('location_logs');
-    if (stored) {
-      setLocations(JSON.parse(stored));
-    }
-  };
-
   useEffect(() => {
     requestPermission().then(granted => {
       if (granted) {
-        loadStoredLocations();
+        getAndSendLocation();
 
-        intervalRef.current = setInterval(() => {
-          getAndStoreLocation();
-        }, 1000);
+        // 1초마다 위치 전송
+        const interval = setInterval(getAndSendLocation, 1000);
+        return () => clearInterval(interval);
       }
     });
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-    };
   }, []);
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>📍 위치 추적 로그</Text>
-      {locations.map((loc, index) => (
-        <Text key={index} style={styles.log}>
-          {index + 1}. [{formatTimestamp(loc.timestamp)}] 위도:{' '}
-          {loc.latitude.toFixed(6)}, 경도: {loc.longitude.toFixed(6)}
-        </Text>
-      ))}
-    </ScrollView>
+    <View style={styles.container}>
+      {location ? (
+        <MapView
+          style={styles.map}
+          initialRegion={{
+            latitude: location.latitude,
+            longitude: location.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }}>
+          <Marker
+            coordinate={{
+              latitude: location.latitude,
+              longitude: location.longitude,
+            }}
+            title="현재 위치"
+            description={`시간: ${new Date(
+              location.timestamp,
+            ).toLocaleTimeString()}`}
+          />
+        </MapView>
+      ) : (
+        <Text style={styles.text}>위치 가져오는 중...</Text>
+      )}
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    padding: 20,
+    flex: 1,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 10,
+  map: {
+    flex: 1,
   },
-  log: {
-    fontSize: 14,
-    marginBottom: 5,
+  text: {
+    marginTop: 100,
+    textAlign: 'center',
   },
 });
 
