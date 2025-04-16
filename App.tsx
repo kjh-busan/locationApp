@@ -1,74 +1,133 @@
-import React, {useEffect, useState} from 'react';
-import {View, Text, PermissionsAndroid, Platform} from 'react-native';
+import React, {useEffect, useRef, useState} from 'react';
+import {
+  View,
+  Text,
+  ScrollView,
+  PermissionsAndroid,
+  Platform,
+  StyleSheet,
+} from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+type Location = {
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+};
 
 const App = () => {
-  const [location, setLocation] = useState<{
-    latitude: number;
-    longitude: number;
-  } | null>(null);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // useEffect(() => {
-  //   const requestLocationPermission = async () => {
-  //     if (Platform.OS === 'ios') {
-  //       getLocation();
-  //     } else {
-  //       const granted = await PermissionsAndroid.request(
-  //         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-  //       );
-  //       if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-  //         getLocation();
-  //       } else {
-  //         console.log('위치 권한 거부됨');
-  //       }
-  //     }
-  //   };
+  const requestPermission = async (): Promise<boolean> => {
+    if (Platform.OS === 'ios') {
+      const auth = await Geolocation.requestAuthorization('always');
+      return auth === 'granted';
+    }
 
-  //   const getLocation = () => {
-  //     Geolocation.getCurrentPosition(
-  //       position => {
-  //         setLocation(position.coords);
-  //       },
-  //       error => {
-  //         console.error(error);
-  //       },
-  //       {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
-  //     );
-  //   };
+    if (Platform.OS === 'android') {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      );
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    }
 
-  //   requestLocationPermission();
-  // }, []);
+    return false;
+  };
+
+  const formatTimestamp = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+      date.getDate(),
+    )} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(
+      date.getSeconds(),
+    )}`;
+  };
+
+  const getAndStoreLocation = async () => {
+    Geolocation.getCurrentPosition(
+      async position => {
+        const newLocation: Location = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          timestamp: position.timestamp,
+        };
+
+        const prevData = await AsyncStorage.getItem('location_logs');
+        const updated = [
+          ...(prevData ? JSON.parse(prevData) : []),
+          newLocation,
+        ];
+
+        await AsyncStorage.setItem('location_logs', JSON.stringify(updated));
+        setLocations(updated);
+      },
+      error => {
+        console.warn('위치 오류:', error.message);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+        forceRequestLocation: true,
+        showLocationDialog: true,
+      },
+    );
+  };
+
+  const loadStoredLocations = async () => {
+    const stored = await AsyncStorage.getItem('location_logs');
+    if (stored) {
+      setLocations(JSON.parse(stored));
+    }
+  };
 
   useEffect(() => {
-    const requestPermission = async () => {
-      const result = await Geolocation.requestAuthorization('whenInUse');
-      console.log('권한 요청 결과:', result); // granted, denied, etc.
-      if (result === 'granted') {
-        getLocation();
-      } else {
-        console.warn('위치 권한 거부됨');
+    requestPermission().then(granted => {
+      if (granted) {
+        loadStoredLocations();
+
+        intervalRef.current = setInterval(() => {
+          getAndStoreLocation();
+        }, 1000);
+      }
+    });
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
       }
     };
-
-    const getLocation = () => {
-      Geolocation.getCurrentPosition(
-        pos => setLocation(pos.coords),
-        err => console.error(err),
-        {enableHighAccuracy: true, timeout: 15000, maximumAge: 10000},
-      );
-    };
-
-    requestPermission();
-    console.log('location:', location);
   }, []);
 
   return (
-    <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
-      <Text>Hello location 김주환</Text>
-      <Text>위도: {location?.latitude}</Text>
-      <Text>경도: {location?.longitude}</Text>
-    </View>
+    <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.title}>📍 위치 추적 로그</Text>
+      {locations.map((loc, index) => (
+        <Text key={index} style={styles.log}>
+          {index + 1}. [{formatTimestamp(loc.timestamp)}] 위도:{' '}
+          {loc.latitude.toFixed(6)}, 경도: {loc.longitude.toFixed(6)}
+        </Text>
+      ))}
+    </ScrollView>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    padding: 20,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  log: {
+    fontSize: 14,
+    marginBottom: 5,
+  },
+});
 
 export default App;
