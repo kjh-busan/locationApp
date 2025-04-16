@@ -1,22 +1,24 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
   View,
+  Text,
+  ScrollView,
   PermissionsAndroid,
   Platform,
   StyleSheet,
-  Text,
 } from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
 import MapView, {Marker} from 'react-native-maps';
 
-const SERVER_URL = 'https://your-api.example.com/location'; // ✅ 실제 서버 주소로 교체
+type Location = {
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+};
 
 const App = () => {
-  const [location, setLocation] = useState<{
-    latitude: number;
-    longitude: number;
-    timestamp: number;
-  } | null>(null);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const requestPermission = async (): Promise<boolean> => {
     if (Platform.OS === 'ios') {
@@ -34,33 +36,28 @@ const App = () => {
     return false;
   };
 
-  const getAndSendLocation = () => {
-    Geolocation.getCurrentPosition(
-      async pos => {
-        const {latitude, longitude} = pos.coords;
-        const timestamp = pos.timestamp;
-        setLocation({latitude, longitude, timestamp});
+  const formatTime = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+      date.getDate(),
+    )} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(
+      date.getSeconds(),
+    )}`;
+  };
 
-        // 서버로 전송
-        try {
-          await fetch(SERVER_URL, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              latitude,
-              longitude,
-              timestamp,
-            }),
-          });
-          console.log('📤 위치 전송 완료');
-        } catch (err) {
-          console.error('❌ 서버 전송 실패:', err);
-        }
+  const getLocation = () => {
+    Geolocation.getCurrentPosition(
+      pos => {
+        const newLoc: Location = {
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          timestamp: pos.timestamp,
+        };
+        setLocations(prev => [...prev, newLoc]);
       },
-      error => {
-        console.warn('위치 오류:', error.message);
+      err => {
+        console.warn('위치 오류:', err.message);
       },
       {
         enableHighAccuracy: true,
@@ -75,54 +72,73 @@ const App = () => {
   useEffect(() => {
     requestPermission().then(granted => {
       if (granted) {
-        getAndSendLocation();
-
-        // 1초마다 위치 전송
-        const interval = setInterval(getAndSendLocation, 1000);
-        return () => clearInterval(interval);
+        getLocation(); // 최초 1회
+        intervalRef.current = setInterval(() => {
+          getLocation();
+        }, 1000);
       }
     });
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
   }, []);
+
+  const lastLocation = locations[locations.length - 1];
 
   return (
     <View style={styles.container}>
-      {location ? (
+      {lastLocation ? (
         <MapView
           style={styles.map}
-          initialRegion={{
-            latitude: location.latitude,
-            longitude: location.longitude,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
+          region={{
+            latitude: lastLocation.latitude,
+            longitude: lastLocation.longitude,
+            latitudeDelta: 0.005,
+            longitudeDelta: 0.005,
           }}>
           <Marker
             coordinate={{
-              latitude: location.latitude,
-              longitude: location.longitude,
+              latitude: lastLocation.latitude,
+              longitude: lastLocation.longitude,
             }}
             title="현재 위치"
-            description={`시간: ${new Date(
-              location.timestamp,
-            ).toLocaleTimeString()}`}
+            description={`시간: ${formatTime(lastLocation.timestamp)}`}
           />
         </MapView>
       ) : (
-        <Text style={styles.text}>위치 가져오는 중...</Text>
+        <Text style={styles.loading}>지도 불러오는 중...</Text>
       )}
+      <ScrollView style={styles.logBox}>
+        {locations.map((loc, idx) => (
+          <Text key={idx} style={styles.logText}>
+            {idx + 1}. [{formatTime(loc.timestamp)}] 위도:{' '}
+            {loc.latitude.toFixed(6)}, 경도: {loc.longitude.toFixed(6)}
+          </Text>
+        ))}
+      </ScrollView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  map: {
-    flex: 1,
-  },
-  text: {
+  container: {flex: 1},
+  map: {flex: 1},
+  loading: {
     marginTop: 100,
     textAlign: 'center',
+    fontSize: 16,
+  },
+  logBox: {
+    backgroundColor: '#fff',
+    padding: 10,
+    maxHeight: 200,
+  },
+  logText: {
+    fontSize: 13,
+    marginBottom: 4,
   },
 });
 
